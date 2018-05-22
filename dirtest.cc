@@ -1,12 +1,14 @@
 #include <glib.h>
 #include <glib-2.0/gio/gio.h>
 #include <iostream>
+#include <blake2.h>
 
 #include <string>
 
 using namespace std;
 
 string path = "./";
+uint8_t key[BLAKE2B_KEYBYTES];
 
 struct StringException : public std::exception {
   std::string str;
@@ -24,10 +26,14 @@ int main(int argc, char **argv) {
     cerr << "no path given" << endl;
     return -1;
   }
+
+  for( size_t i = 0; i < BLAKE2B_KEYBYTES; ++i )
+      key[i] = ( uint8_t )i;
   
   GFile *file = g_file_new_for_path(argv[1]);
   enumerate(file, file);
 }
+
 
 void enumerate(GFile *root, GFile *file) {
   GFileEnumerator *enumerator;
@@ -65,6 +71,14 @@ void enumerate(GFile *root, GFile *file) {
                           &len,
                                 &error))
         throw StringException("read error");
+      uint8_t hash[BLAKE2B_OUTBYTES];
+      
+      if( blake2b( hash, data, key, BLAKE2B_OUTBYTES, len, BLAKE2B_KEYBYTES ) < 0)
+        throw StringException("hash problem");
+
+      for (auto h : hash)
+        printf("%x", h);
+      cout << endl;
       
       g_free(data);
       //cout << g_file_info_get_name(finfo) << endl;
