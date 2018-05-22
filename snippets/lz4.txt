@@ -1,0 +1,12 @@
+ #include "lz4.h"     // This is all that is required to expose the prototypes for basic compression and decompression.
+
+
+const int max_dst_size = LZ4_compressBound(src_size);
+    // We will use that size for our destination boundary when allocating space.
+      char* compressed_data = malloc(max_dst_size);
+        if (compressed_data == NULL)
+            run_screaming("Failed to allocate memory for *compressed_data.", 1);
+              // That's all the information and preparation LZ4 needs to compress *src into *compressed_data.
+                // Invoke LZ4_compress_default now with our size values and pointers to our memory locations.
+                  // Save the return value for error checking.
+                    const int compressed_data_size = LZ4_compress_default(src, compressed_data, src_size, max_dst_size);
