@@ -29,6 +29,7 @@ struct DB {
   DB() {
     cout << "opening" << endl;
     c( mdb_env_create(&env) );
+    c( mdb_env_set_mapsize(env, size_t(1) << 40) ); //One TB
     c( mdb_env_open(env, "./testdb", MDB_NOSUBDIR, 0664) );
     c( mdb_txn_begin(env, NULL, 0, &txn) );
     c( mdb_dbi_open(txn, NULL, MDB_CREATE, &dbi) );
@@ -117,17 +118,32 @@ void enumerate(GFile *root, GFile *file) {
       GFile *child;
       GFileInfo *finfo;
       char *relative_path;
-
+      char *base_name;
+      
       if (!g_file_enumerator_iterate (enumerator, &finfo, &child, NULL, &error))
         break;
       if (!finfo)
         break;
 
-      if (g_file_info_get_file_type (finfo) == G_FILE_TYPE_DIRECTORY)
+      base_name = g_file_get_basename(child);
+      relative_path = g_file_get_relative_path (root, child);
+
+
+      auto file_type = g_file_info_get_file_type (finfo);
+      if (file_type == G_FILE_TYPE_DIRECTORY)
         {
           enumerate(root, child);
           continue;
         }
+      if (file_type == G_FILE_TYPE_SPECIAL) {
+        cout << "SKIPPING SPECIAL FILE: " << base_name << endl;
+        continue;
+      }
+      if (string("testdb") == base_name) {
+        cout << "SKIPPING DATABASE FILE: " << base_name << endl;
+        continue;
+      }
+
       
       gchar *data = 0;
       gsize len(0);
@@ -162,13 +178,11 @@ void enumerate(GFile *root, GFile *file) {
       g_free(data);
       //cout << g_file_info_get_name(finfo) << endl;
       
-      relative_path = g_file_get_relative_path (root, child);
-
       cout << relative_path << " " << len << " " << compressed_data_len << " " << (static_cast<double>(total_uncompressed) / total_compressed) << endl;
       cout << total_uncompressed << " " << total_compressed << endl;
       g_assert (relative_path != NULL);
       g_free (relative_path);
-      
+              g_free (base_name);
       
     }
   g_file_enumerator_close(enumerator, NULL, &error);
