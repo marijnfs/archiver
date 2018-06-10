@@ -1,24 +1,23 @@
-#include <capnp/message.h>
-#include <capnp/serialize.h>
-#include <capnp/serialize-packed.h>
+#ifndef __SERIALISE_H__
+#define __SERIALISE_H__
 
 
-::capnp::MallocMessageBuilder cap_message;
-auto builder = cap_message.initRoot<cap::Recording>();
-auto cap_data = messageToFlatArray(cap_message);
-auto cap_bytes = cap_data.asBytes();
-bytes->resize(cap_bytes.size());
-memcpy(&(*bytes)[0], &cap_bytes[0], cap_bytes.size());
+//#include "bytes.h"
+
+struct Writer {
+  Writer(){}
 
 
+};
 
-Bytes kjwp
-::capnp::FlatArrayMessageReader reader(bytes.kjwp());
-variables.clear();
-objects.clear();
-triggers.clear();
-snaps.clear();
-index_map.clear();
+struct Reader {
+  Reader() {char *ptr, int size) {
+    //Bytes bytes;
+    //::capnp::FlatArrayMessageReader reader(bytes.kjwp());
+    
+    //auto rec = reader.getRoot<cap::Recording>();
+  }
 
-auto rec = reader.getRoot<cap::Recording>();
+};
 
+#endif

@@ -1,8 +1,4 @@
-using Cxx = import "/capnp/c++.capnp";
 @0xaff13c93205b1f69;
-$Cxx.namespace("cap");
-
-
 
 struct Entry {
     name @0 : Text;
@@ -22,8 +18,8 @@ struct Dir {
 struct Root {
     name @0 : Text;
     description @1 : Text;
-
-    hash @2 : Data;
+    size @2 : UIint64;
+    hash @3 : Data;
 }
 
 struct Backup {
