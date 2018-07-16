@@ -4,14 +4,17 @@
 #include <iostream>
 #include <lmdb.h>
 #include <lz4.h>
+#include <ctime>
 
 #include <string>
 #include <vector>
 #include <tuple>
+#include <capnp/message.h>
 #include <capnp/serialize.h>
+#include <capnp/serialize-packed.h>
 //#include "serialise.h"
 #include "files.capnp.h"
-
+#include "bytes.h"
 
 using namespace std;
 
@@ -44,6 +47,7 @@ struct DB {
 
   ~DB() { mdb_dbi_close(env, dbi); }
 
+  //put function for vector types
   template <typename T, typename D>
   void put(std::vector<T> &key, vector<D> &data) {
     put(reinterpret_cast<uint8_t *>(&key[0]),
@@ -51,6 +55,7 @@ struct DB {
         data.size() * sizeof(D));
   }
 
+  //classic byte pointer put function
   void put(uint8_t *key, uint8_t *data, size_t key_len, size_t data_len) {
     MDB_val mkey{key_len, key}, mdata{data_len, data};
 
@@ -59,16 +64,31 @@ struct DB {
     c(mdb_txn_commit(txn));
   }
 
-  std::vector<uint8_t> get(std::vector<uint8_t> &key) {
+  Bytes *get(uint8_t *ptr, size_t len) {
+    MDB_val mkey{len, ptr};
+    MDB_val mdata;
+    c(mdb_txn_begin(env, NULL, 0, &txn));
+    int result = mdb_get(txn, dbi, &mkey, &mdata);
+    if (result == MDB_NOTFOUND)
+      return 0;
+    auto ret_val = new Bytes(reinterpret_cast<uint8_t *>(mdata.mv_data),
+                                            reinterpret_cast<uint8_t *>(mdata.mv_data) +
+                                            mdata.mv_size);
+    c(mdb_txn_commit(txn));
+    return ret_val;
+  }
+
+  Bytes *get(std::vector<uint8_t> &key) {
+    return get(&key[0], key.size());
+  }
+
+  bool has(std::vector<uint8_t> &key) {
     MDB_val mkey{key.size(), &key[0]};
     MDB_val mdata;
     c(mdb_txn_begin(env, NULL, 0, &txn));
-    c(mdb_get(txn, dbi, &mkey, &mdata));
-    std::vector<uint8_t> ret_val(reinterpret_cast<uint8_t *>(mdata.mv_data),
-                                 reinterpret_cast<uint8_t *>(mdata.mv_data) +
-                                     mdata.mv_size);
+    int result = mdb_get(txn, dbi, &mkey, &mdata);
     c(mdb_txn_commit(txn));
-    return ret_val;
+    return result != MDB_NOTFOUND;
   }
 
   int rc;
@@ -76,6 +96,7 @@ struct DB {
   MDB_dbi dbi;
   MDB_txn *txn = 0;
 
+  //check function
   void c(int rc) {
     if (rc != 0) {
       fprintf(stderr, "txn->commit: (%d) %s\n", rc, mdb_strerror(rc));
@@ -89,7 +110,56 @@ DB db;
 
 uint64_t total_uncompressed(0), total_compressed(0);
 
-tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
+Bytes get_hash(uint8_t *ptr, int len) {
+    Bytes hash(HASH_BYTES);
+    if (blake2b(&hash[0], ptr, key, HASH_BYTES, len, BLAKE2B_KEYBYTES) < 0)
+      throw StringException("hash problem");
+    return hash;
+}
+
+struct RMessage {
+  RMessage(Bytes &b) : flat_reader(b.kjwp()) {
+  }
+                                                
+  template <typename T>
+  T read() {
+    return flat_reader.getRoot<T>();
+  }
+
+  ::capnp::FlatArrayMessageReader flat_reader;
+};
+
+struct Message {
+  Message(){}
+  capnp::MallocMessageBuilder msg;
+  
+  template <typename T>
+  typename T::Builder build() {
+    return msg.initRoot<T>();
+  }
+
+  //gives data pointer
+  uint8_t *data() {
+    serialise();
+    return (uint8_t*) &wdata[0];
+  }
+
+  int size() {
+    serialise();
+    return wdata.asBytes().size();
+  }
+
+  void serialise() {
+    if (!serialised)
+      wdata = messageToFlatArray(msg);
+    serialised = true;
+  }
+
+  bool serialised = false;
+  kj::Array<capnp::word> wdata = 0;
+};
+
+tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   vector<uint8_t> dir_hash(HASH_BYTES);
 
   GFileEnumerator *enumerator;
@@ -104,7 +174,7 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
 
   vector<string> names;
   vector<uint64_t> sizes;
-  vector<vector<uint8_t>> hashes;
+  vector<Bytes> hashes;
   vector<bool> is_dir;
 
   uint64_t total_size(0);
@@ -124,6 +194,7 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
     relative_path = g_file_get_relative_path(root, child);
     auto file_type = g_file_info_get_file_type(finfo);
 
+    //skip special files, like sockets
     if (file_type == G_FILE_TYPE_SPECIAL) {
       cout << "SKIPPING SPECIAL FILE: " << base_name << endl;
       continue;
@@ -134,6 +205,7 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
       continue;
     }
 
+    //handle directories by recursively calling enumerate, which returns a hash and total size
     if (file_type == G_FILE_TYPE_DIRECTORY) {
       auto [hash, n] = enumerate(root, child); 
       names.push_back(base_name);
@@ -144,22 +216,23 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
       continue;
     }
 
+    
+    //if we are here this should be a regular file, read it
     gchar *data = 0;
     gsize len(0);
     if (!g_file_get_contents(g_file_get_path(child), &data, &len, &error)) {
       cerr << "Read Error: " << g_file_get_path(child) << endl;
       continue;
     }
-
-    vector<uint8_t> hash(HASH_BYTES);
-
-    if (blake2b(&hash[0], data, key, HASH_BYTES, len, BLAKE2B_KEYBYTES) < 0)
-      throw StringException("hash problem");
+    
+    //calculate its hash
+    Bytes hash = get_hash((uint8_t*)data, len);
 
     for (auto h : hash)
       printf("%x", h);
     cout << endl;
 
+    //compress the file and see how much you compress it
     const int max_compressed_len = LZ4_compressBound(len);
     // We will use that size for our destination boundary when allocating space.
     vector<char> compressed_data(max_compressed_len);
@@ -176,9 +249,10 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
     sizes.push_back(len);
     is_dir.push_back(false);
     total_size += len;
+
     
     if (!ONLY_ARCHIVE)
-      db.put(hash, compressed_data);
+      db.put(hash, compressed_data); //store compressed file in database
     g_free(data);
     // cout << g_file_info_get_name(finfo) << endl;
 
@@ -193,8 +267,9 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
   g_file_enumerator_close(enumerator, NULL, &error);
 
   /// Dir serialiser
-  capnp::MallocMessageBuilder dir_message;
-  auto builder = dir_message.initRoot<Dir>();
+
+  Message dir_message;
+  auto builder = dir_message.build<Dir>();
 
   builder.setSize(total_size);
   int n_entries = names.size();
@@ -213,18 +288,18 @@ tuple<vector<uint8_t>, uint64_t> enumerate(GFile *root, GFile *file) {
   }  
 
   /// Get data and calculate the hash
-  auto dir_data = messageToFlatArray(dir_message);
-  size_t data_len = dir_data.asBytes().size();
+  uint8_t *dir_data = dir_message.data();
+  size_t data_len = dir_message.size();
   
-  vector<uint8_t> hash(HASH_BYTES);
+  Bytes hash(HASH_BYTES);
   
   if (blake2b(&hash[0], &dir_data[0], key, HASH_BYTES, data_len, BLAKE2B_KEYBYTES) < 0)
       throw StringException("hash problem");
   
   /// store it
-  db.put(&hash[0], (uint8_t*)&dir_data[0], hash.size(), data_len);
+  db.put(&hash[0], dir_data, hash.size(), data_len);
 
-  return tuple<vector<uint8_t>, uint64_t>(hash, total_size);
+  return tuple<Bytes, uint64_t>(hash, total_size);
 }
 
 template <typename T>
@@ -239,9 +314,34 @@ std::ostream &operator<<(std::ostream &out, std::vector<T> &vec) {
 
 void backup(GFile *root, string root_description, string backup_description) {
   auto [root_hash, root_size] = enumerate(root, root);
-  
+  //we have root hash and size
+  //save the root
   cout << root_hash << " size:" << root_size << endl;
+  Message msg;
+  auto builder = msg.build<Backup>();
+  builder.setName(root_description);
+  builder.setDescription(backup_description);
+  builder.setHash(root_hash.kjp());  
+  builder.setSize(root_size);
+  builder.setTimestamp(std::time(0));
+  string rootstr("ROOT")
+;    
+
+  db.put((uint8_t*)&rootstr[0], msg.data(), rootstr.size(), msg.size());
+}
+
+void read_backup() {
+  string root_str("ROOT");
+  auto data = db.get((uint8_t*)&root_str[0], root_str.size());
+
+  if (!data)
+    throw StringException("No root found");
+
+  RMessage reader(*data);
+  auto r = reader.read<Backup::Reader>();
   
+
+  delete data;
 }
 
 int main(int argc, char **argv) {
@@ -250,9 +350,13 @@ int main(int argc, char **argv) {
     return -1;
   }
 
+  //Set a standard key for the blake hash
   for (size_t i = 0; i < BLAKE2B_KEYBYTES; ++i)
     key[i] = (uint8_t)i;
 
-  GFile *file = g_file_new_for_path(argv[1]);
-  backup(file, "", "");
+  //get gfile to given path
+  GFile *file = g_file_new_for_path(argv[1]);  
+
+  //backup recursively
+  backup(file, "testdir", "this is a test dir");
 }

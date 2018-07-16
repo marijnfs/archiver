@@ -48,7 +48,7 @@ struct Bytes : public std::vector<uint8_t> {
     return kj::ArrayPtr<::capnp::word const>((::capnp::word const*) &(*this)[0], (size()+1)/2);
   }
 
-   template <typename T>
+   template <typename T = uint8_t*>
      T ptr() {
      return reinterpret_cast<T>(&(*this)[0]);
    }
@@ -57,10 +57,11 @@ struct Bytes : public std::vector<uint8_t> {
      //void bla() {
      return kj::ArrayPtr<kj::byte>(&(*this)[0], size());
    }
+
 };
 
 inline std::ostream &operator<<(std::ostream &out, Bytes const &b) {
-  std::cout << b.str();
+  return std::cout << b.str();
 }
 
 #endif

@@ -15,17 +15,12 @@ struct Dir {
     size @1 : UInt64;
 }
 
-struct Root {
+struct Backup {
     name @0 : Text;
     description @1 : Text;
-    size @2 : UIint64;
+    size @2 : UInt64;
     hash @3 : Data;
-}
-
-struct Backup {
-    description @0 : Text;
-    root @1 : Data;
-    timestamp @2 : UInt64;
+    timestamp @4 : UInt64;
 }
 
 struct Backups {
