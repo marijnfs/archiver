@@ -19,6 +19,7 @@
 using namespace std;
 
 string path = "./";
+char *DBNAME = "archiver.db";
 uint8_t key[BLAKE2B_KEYBYTES];
 uint HASH_BYTES(32);
 bool ONLY_ARCHIVE(true);
@@ -30,12 +31,17 @@ struct StringException : public std::exception {
   const char *what() const noexcept { return str.c_str(); }
 };
 
+enum Overwrite {
+  OVERWRITE = 0,
+  NOOVERWRITE = 1
+};
+
 struct DB {
   DB() {
     cout << "opening" << endl;
     c(mdb_env_create(&env));
     c(mdb_env_set_mapsize(env, size_t(1) << 40)); // One TB
-    c(mdb_env_open(env, "./testdb", MDB_NOSUBDIR, 0664));
+    c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR, 0664));
     c(mdb_txn_begin(env, NULL, 0, &txn));
     c(mdb_dbi_open(txn, NULL, MDB_CREATE, &dbi));
     // char *bla = " ";
@@ -49,19 +55,23 @@ struct DB {
 
   //put function for vector types
   template <typename T, typename D>
-  void put(std::vector<T> &key, vector<D> &data) {
-    put(reinterpret_cast<uint8_t *>(&key[0]),
+  bool put(std::vector<T> &key, vector<D> &data, Overwrite overwrite = OVERWRITE) {
+    return put(reinterpret_cast<uint8_t *>(&key[0]),
         reinterpret_cast<uint8_t *>(&data[0]), key.size() * sizeof(T),
-        data.size() * sizeof(D));
+        data.size() * sizeof(D), overwrite);
   }
 
   //classic byte pointer put function
-  void put(uint8_t *key, uint8_t *data, size_t key_len, size_t data_len) {
+  bool put(uint8_t *key, uint8_t *data, size_t key_len, size_t data_len, Overwrite overwrite = OVERWRITE) {
     MDB_val mkey{key_len, key}, mdata{data_len, data};
 
     c(mdb_txn_begin(env, NULL, 0, &txn));
-    c(mdb_put(txn, dbi, &mkey, &mdata, MDB_NODUPDATA));
+    int result = mdb_put(txn, dbi, &mkey, &mdata, (overwrite == NOOVERWRITE) ? MDB_NOOVERWRITE : 0);
     c(mdb_txn_commit(txn));
+    if (result == MDB_KEYEXIST)
+      return false;
+    c(result);
+    return true;
   }
 
   Bytes *get(uint8_t *ptr, size_t len) {
@@ -260,7 +270,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
 
     
     if (!ONLY_ARCHIVE)
-      db.put(hash, compressed_data); //store compressed file in database
+      db.put(hash, compressed_data, NOOVERWRITE); //store compressed file in database
     g_free(data);
     // cout << g_file_info_get_name(finfo) << endl;
 
