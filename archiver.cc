@@ -116,18 +116,18 @@ Bytes get_hash(uint8_t *ptr, int len) {
       throw StringException("hash problem");
     return hash;
 }
-
+/*
 struct RMessage {
   RMessage(Bytes &b) : flat_reader(b.kjwp()) {
   }
                                                 
   template <typename T>
   T read() {
-    return flat_reader.getRoot<T>();
+    return flat_reader.getRoot<T>(T());
   }
 
   ::capnp::FlatArrayMessageReader flat_reader;
-};
+};*/
 
 struct Message {
   Message(){}
@@ -269,7 +269,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   /// Dir serialiser
 
   Message dir_message;
-  auto builder = dir_message.build<Dir>();
+  auto builder = dir_message.build<cap::Dir>();
 
   builder.setSize(total_size);
   int n_entries = names.size();
@@ -318,12 +318,12 @@ void backup(GFile *root, string root_description, string backup_description) {
   //save the root
   cout << root_hash << " size:" << root_size << endl;
   Message msg;
-  auto builder = msg.build<Backup>();
-  builder.setName(root_description);
-  builder.setDescription(backup_description);
-  builder.setHash(root_hash.kjp());  
-  builder.setSize(root_size);
-  builder.setTimestamp(std::time(0));
+  auto b = msg.build<cap::Backup>();
+  b.setName(root_description);
+  b.setDescription(backup_description);
+  b.setHash(root_hash.kjp());  
+  b.setSize(root_size);
+  b.setTimestamp(std::time(0));
   string rootstr("ROOT")
 ;    
 
@@ -332,19 +332,46 @@ void backup(GFile *root, string root_description, string backup_description) {
 
 void read_backup() {
   string root_str("ROOT");
-  auto data = db.get((uint8_t*)&root_str[0], root_str.size());
+  auto root_hash = db.get((uint8_t*)&root_str[0], root_str.size());
 
-  if (!data)
+  if (!root_hash)
     throw StringException("No root found");
-
-  RMessage reader(*data);
-  auto r = reader.read<Backup::Reader>();
   
+  auto root = db.get(*root_hash);
 
-  delete data;
+  ::capnp::FlatArrayMessageReader flat_reader(root->kjwp());
+  
+  //RMessage reader(*data);
+  auto r = flat_reader.getRoot<cap::Root>();
+  auto backups = r.getBackups();
+  cout << backups.size() << endl;
 }
 
+struct Backup {
+};
+
+struct Archiver {
+  DB db;
+
+  //get all root names
+  vector<string> get_backups() {
+    return vector<string>();
+  }
+
+  Backup get_backup(string name) {
+    return Backup();
+  }
+
+  //get root backup struct
+  
+
+  void get_children(Backup backup) {
+  }
+};
+
 int main(int argc, char **argv) {
+  read_backup();
+  
   if (argc != 2) {
     cerr << "no path given" << endl;
     return -1;
@@ -358,5 +385,6 @@ int main(int argc, char **argv) {
   GFile *file = g_file_new_for_path(argv[1]);  
 
   //backup recursively
-  backup(file, "testdir", "this is a test dir");
+  
+  //backup(file, "testdir", "this is a test dir");
 }
