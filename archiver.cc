@@ -159,6 +159,10 @@ struct Message {
     serialised = true;
   }
 
+  Bytes hash() {
+    return get_hash(data(), size());
+  }
+
   bool serialised = false;
   kj::Array<capnp::word> wdata = 0;
 };
@@ -271,7 +275,6 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   g_file_enumerator_close(enumerator, NULL, &error);
 
   /// Dir serialiser
-
   Message dir_message;
   auto builder = dir_message.build<cap::Dir>();
 
@@ -295,7 +298,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   uint8_t *dir_data = dir_message.data();
   size_t data_len = dir_message.size();
   
-  Bytes hash(HASH_BYTES);
+  auto hash = dir_message.hash();
   
   if (blake2b(&hash[0], &dir_data[0], key, HASH_BYTES, data_len, BLAKE2B_KEYBYTES) < 0)
       throw StringException("hash problem");
@@ -316,22 +319,25 @@ std::ostream &operator<<(std::ostream &out, std::vector<T> &vec) {
   return out << "]";
 }
 
-void backup(GFile *root, string root_description, string backup_description) {
-  auto [root_hash, root_size] = enumerate(root, root);
+void backup(GFile *path, string backup_name, string backup_description) {
+  auto [dir_hash, backup_size] = enumerate(path, path);
   //we have root hash and size
   //save the root
-  cout << root_hash << " size:" << root_size << endl;
+  cout << dir_hash << " size:" << backup_size << endl;
   Message msg;
   auto b = msg.build<cap::Backup>();
-  b.setName(root_description);
+  b.setName(backup_name);
   b.setDescription(backup_description);
-  b.setHash(root_hash.kjp());  
-  b.setSize(root_size);
+  b.setHash(dir_hash.kjp());  
+  b.setSize(backup_size);
   b.setTimestamp(std::time(0));
-  string rootstr("ROOT")
-;    
 
-  db.put((uint8_t*)&rootstr[0], msg.data(), rootstr.size(), msg.size());
+  auto backup_hash = msg.hash();
+
+  db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
+
+  string rootstr("ROOT");
+  db.put((uint8_t*)&rootstr[0], &backup_hash[0], rootstr.size(), backup_hash.size());
 }
 
 void read_backup() {
@@ -349,6 +355,11 @@ void read_backup() {
   auto r = flat_reader.getRoot<cap::Root>();
   auto backups = r.getBackups();
   cout << backups.size() << endl;
+  
+  for (auto b : backups) {
+    Bytes bytes(b);
+    db.get(bytes);
+  }
 }
 
 struct Backup {
@@ -431,6 +442,7 @@ int main(int argc, char **argv) {
       cerr << "usage: " << argv[0] << " " << command << endl;
       return -1;
     }
+    
     
   }
 
