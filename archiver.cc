@@ -91,6 +91,10 @@ struct DB {
     return result != MDB_NOTFOUND;
   }
 
+  void copy_db(string path) {
+    c(mdb_env_copy2(env, path.c_str(), MDB_CP_COMPACT));
+  }
+
   int rc;
   MDB_env *env = 0;
   MDB_dbi dbi;
@@ -370,21 +374,74 @@ struct Archiver {
 };
 
 int main(int argc, char **argv) {
-  read_backup();
-  
-  if (argc != 2) {
-    cerr << "no path given" << endl;
-    return -1;
-  }
-
   //Set a standard key for the blake hash
   for (size_t i = 0; i < BLAKE2B_KEYBYTES; ++i)
     key[i] = (uint8_t)i;
 
-  //get gfile to given path
-  GFile *file = g_file_new_for_path(argv[1]);  
-
-  //backup recursively
+  if (argc < 2) {
+    cerr << "no command given, use: " << argv[0] << " [command] [options]" << endl;
+    cerr << "command = [archive, dryrun, duplicate, filelist, list]" << endl;
+    return -1;
+  }
   
-  //backup(file, "testdir", "this is a test dir");
+  string command(argv[1]);
+
+  if (command == "archive") {
+    if (argc != 4) {
+      cerr << "usage: " << argv[0] << " " << command << " [name] [path]" << endl;
+      return -1;
+    }
+    string name(argv[2]);
+    
+    ONLY_ARCHIVE = false;
+    //get gfile to given path
+    GFile *file = g_file_new_for_path(argv[3]);  
+    
+    //backup recursively  
+    backup(file, name, "");
+  }
+
+  if (command == "dryrun") {
+    if (argc != 4) {
+      cerr << "usage: " << argv[0] << " " << command << " [name] [path]" << endl;
+      return -1;
+    }
+
+    string name(argv[2]);
+    
+    ONLY_ARCHIVE = true;
+    //get gfile to given path
+    GFile *file = g_file_new_for_path(argv[3]);  
+    
+    //backup recursively  
+    backup(file, name, "");
+  }
+  
+  if (command == "duplicate") {
+    if (argc != 3) {
+      cerr << "usage: " << argv[0] << " " << command << " [path]" << endl;
+      return -1;
+    }
+    
+    db.copy_db(argv[2]);
+  }
+
+  if (command == "list") {
+    if (argc != 2) {
+      cerr << "usage: " << argv[0] << " " << command << endl;
+      return -1;
+    }
+    
+  }
+
+  if (command == "filelist") {
+    if (argc != 3) {
+      cerr << "usage: " << argv[0] << " " << command << " [backup name]" << endl;
+      return -1;
+    }
+    
+    
+  }
+    
+
 }

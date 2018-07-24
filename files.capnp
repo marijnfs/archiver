@@ -30,4 +30,5 @@ struct Backup {
 struct Root {
     backups @0 : List(Data);
     lastRoot @1 : Data; #hash of last backups object
+    timestamp @2 : UInt64;
 }
