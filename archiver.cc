@@ -328,7 +328,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
   auto b = msg.build<cap::Backup>();
   b.setName(backup_name);
   b.setDescription(backup_description);
-  b.setHash(dir_hash.kjp());  
+  b.setHash(dir_hash.kjp());
   b.setSize(backup_size);
   b.setTimestamp(std::time(0));
 
@@ -336,8 +336,15 @@ void backup(GFile *path, string backup_name, string backup_description) {
 
   db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
 
+  Message root_msg;
+  auto root_b = root_msg.build<cap::Root>();
+  auto backups_build = root_b.initBackups(1);
+  backups_build.set(0, backup_hash.kjp());
+  auto root_hash = root_msg.hash();
+  db.put(&root_hash[0], root_msg.data(), root_hash.size(), root_msg.size());
+
   string rootstr("ROOT");
-  db.put((uint8_t*)&rootstr[0], &backup_hash[0], rootstr.size(), backup_hash.size());
+  db.put((uint8_t*)&rootstr[0], &root_hash[0], rootstr.size(), root_hash.size());
 }
 
 void read_backup() {
@@ -348,17 +355,22 @@ void read_backup() {
     throw StringException("No root found");
   
   auto root = db.get(*root_hash);
-
-  ::capnp::FlatArrayMessageReader flat_reader(root->kjwp());
-  
-  //RMessage reader(*data);
+  if (!root)
+    throw StringException("root not found");
+  cout << root->size() << endl;
+  ::capnp::FlatArrayMessageReader flat_reader(*root);
   auto r = flat_reader.getRoot<cap::Root>();
+
   auto backups = r.getBackups();
   cout << backups.size() << endl;
   
   for (auto b : backups) {
-    Bytes bytes(b);
-    db.get(bytes);
+    Bytes backup_hash(b);
+    auto backup = db.get(backup_hash);
+    
+    ::capnp::FlatArrayMessageReader flat_reader(*backup);
+    auto r = flat_reader.getRoot<cap::Backup>();
+    cout << string(r.getName()) << endl;
   }
 }
 
@@ -443,7 +455,7 @@ int main(int argc, char **argv) {
       return -1;
     }
     
-    
+    read_backup();
   }
 
   if (command == "filelist") {

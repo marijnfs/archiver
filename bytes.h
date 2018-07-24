@@ -52,10 +52,15 @@ struct Bytes : public std::vector<uint8_t> {
      T ptr() {
      return reinterpret_cast<T>(&(*this)[0]);
    }
-
-   operator kj::ArrayPtr<kj::byte>() {
+   
+   operator kj::ArrayPtr<kj::byte const>() {
      //void bla() {
-     return kj::ArrayPtr<kj::byte>(&(*this)[0], size());
+     return kjp();
+   }
+
+   operator kj::ArrayPtr<::capnp::word const>() {
+     //void bla() {
+     return kjwp();
    }
 
 };
