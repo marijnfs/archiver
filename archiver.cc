@@ -70,6 +70,7 @@ struct DB {
     c(mdb_txn_commit(txn));
     if (result == MDB_KEYEXIST)
       return false;
+
     c(result);
     return true;
   }
@@ -79,12 +80,13 @@ struct DB {
     MDB_val mdata;
     c(mdb_txn_begin(env, NULL, 0, &txn));
     int result = mdb_get(txn, dbi, &mkey, &mdata);
+    c(mdb_txn_commit(txn));
     if (result == MDB_NOTFOUND)
       return 0;
     auto ret_val = new Bytes(reinterpret_cast<uint8_t *>(mdata.mv_data),
                                             reinterpret_cast<uint8_t *>(mdata.mv_data) +
                                             mdata.mv_size);
-    c(mdb_txn_commit(txn));
+    
     return ret_val;
   }
 
@@ -440,6 +442,9 @@ void backup(GFile *path, string backup_name, string backup_description) {
     b.setTimestamp(std::time(0));
     
     auto backup_hash = msg.hash();
+    cout << "hash: " << backup_hash << " " << msg.size() << endl;
+    msg.data();
+    msg.size();
     db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
         
     Message root_msg;
@@ -447,7 +452,8 @@ void backup(GFile *path, string backup_name, string backup_description) {
     root_b.setTimestamp(std::time(0));
     auto backups_build = root_b.initBackups(1);
     backups_build.set(0, backup_hash.kjp());
-    *root_hash = root_msg.hash();
+    
+    root_hash = new Bytes(root_msg.hash());
     db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
   }
 
