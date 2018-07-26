@@ -66,7 +66,10 @@ struct Bytes : public std::vector<uint8_t> {
 };
 
 inline std::ostream &operator<<(std::ostream &out, Bytes const &b) {
-  return std::cout << b.str();
+  for (auto h : b)
+    printf("%x", h);
+  return out;
+  //return std::cout << b.str();
 }
 
 #endif

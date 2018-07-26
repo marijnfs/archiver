@@ -246,9 +246,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
     //calculate its hash
     Bytes hash = get_hash((uint8_t*)data, len);
 
-    for (auto h : hash)
-      printf("%x", h);
-    cout << endl;
+    cout << hash << endl;
 
     //compress the file and see how much you compress it
     const int max_compressed_len = LZ4_compressBound(len);
@@ -329,45 +327,30 @@ std::ostream &operator<<(std::ostream &out, std::vector<T> &vec) {
   return out << "]";
 }
 
-void backup(GFile *path, string backup_name, string backup_description) {
-  auto [dir_hash, backup_size] = enumerate(path, path);
-  //we have root hash and size
-  //save the root
-  cout << dir_hash << " size:" << backup_size << endl;
-  Message msg;
-  auto b = msg.build<cap::Backup>();
-  b.setName(backup_name);
-  b.setDescription(backup_description);
-  b.setHash(dir_hash.kjp());
-  b.setSize(backup_size);
-  b.setTimestamp(std::time(0));
 
-  auto backup_hash = msg.hash();
+struct Backup {
+  string name;
+  string description;
 
-  db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
+  uint64_t size = 0;
+  Bytes hash;
+  uint64_t timestamp = 0;
 
-  Message root_msg;
-  auto root_b = root_msg.build<cap::Root>();
-  auto backups_build = root_b.initBackups(1);
-  backups_build.set(0, backup_hash.kjp());
-  auto root_hash = root_msg.hash();
-  db.put(&root_hash[0], root_msg.data(), root_hash.size(), root_msg.size());
+};
 
-  string rootstr("ROOT");
-  db.put((uint8_t*)&rootstr[0], &root_hash[0], rootstr.size(), root_hash.size());
-}
-
-void read_backup() {
+Bytes *get_root_hash() {
   string root_str("ROOT");
   auto root_hash = db.get((uint8_t*)&root_str[0], root_str.size());
+  return root_hash;
+}
 
-  if (!root_hash)
-    throw StringException("No root found");
-  
-  auto root = db.get(*root_hash);
+vector<Backup> get_backups(Bytes root_hash) {
+  vector<Backup> returns;
+  cout << root_hash << endl;
+  auto root = db.get(root_hash);
   if (!root)
     throw StringException("root not found");
-  cout << root->size() << endl;
+  
   ::capnp::FlatArrayMessageReader flat_reader(*root);
   auto r = flat_reader.getRoot<cap::Root>();
 
@@ -375,17 +358,111 @@ void read_backup() {
   cout << backups.size() << endl;
   
   for (auto b : backups) {
+    Backup backup;
     Bytes backup_hash(b);
-    auto backup = db.get(backup_hash);
+    auto backup_data = db.get(backup_hash);
     
-    ::capnp::FlatArrayMessageReader flat_reader(*backup);
+    ::capnp::FlatArrayMessageReader flat_reader(*backup_data);
     auto r = flat_reader.getRoot<cap::Backup>();
-    cout << string(r.getName()) << endl;
+    backup.name = r.getName();
+    backup.description = r.getDescription();
+    backup.size = r.getSize();
+    backup.hash = Bytes(r.getHash());
+    backup.timestamp = r.getTimestamp();
+    returns.push_back(backup);
   }
+  return returns;
 }
 
-struct Backup {
-};
+void backup(GFile *path, string backup_name, string backup_description) {
+  auto [dir_hash, backup_size] = enumerate(path, path);
+  //we have root hash and size
+  //save the root
+  cout << "root dir hash: " << dir_hash << " size:" << backup_size << endl;
+
+  // Get current root if there is one
+  auto root_hash = get_root_hash();
+  if (root_hash) {
+    auto backups = get_backups(*root_hash);
+    bool replaced(false);
+    int n(0);
+    for (auto &b : backups) {
+      if (b.name == backup_name) {
+        cout << "found backup name, replacing" << endl;
+        backups.erase(backups.begin() + n);
+        break;
+      }
+      ++n;
+    }
+    if (!replaced) {
+      Backup b;
+      b.name = backup_name;
+      b.description = backup_description;
+      b.size = backup_size;
+      b.timestamp = std::time(0);
+      b.hash = dir_hash;
+      backups.push_back(b);
+    }
+    
+
+    Message root_msg;
+    auto root_b = root_msg.build<cap::Root>();
+    root_b.setTimestamp(std::time(0));
+    auto backups_build = root_b.initBackups(backups.size());
+    n = 0;
+    for (auto &backup : backups) {
+        Message msg;
+        auto b = msg.build<cap::Backup>();
+        b.setName(backup.name);
+        b.setDescription(backup.description);
+        b.setHash(backup.hash.kjp());
+        b.setSize(backup.size);
+        b.setTimestamp(backup.timestamp);
+        
+        auto backup_hash = msg.hash();
+        db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
+        backups_build.set(n, backup_hash.kjp());
+        ++n;
+    }
+    
+    root_b.setLastRoot(root_hash->kjp());
+    *root_hash = root_msg.hash();
+    db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
+    
+  } else {
+    cout << "no current root found" << endl;
+    Message msg;
+    auto b = msg.build<cap::Backup>();
+    b.setName(backup_name);
+    b.setDescription(backup_description);
+    b.setHash(dir_hash.kjp());
+    b.setSize(backup_size);
+    b.setTimestamp(std::time(0));
+    
+    auto backup_hash = msg.hash();
+    db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
+        
+    Message root_msg;
+    auto root_b = root_msg.build<cap::Root>();
+    root_b.setTimestamp(std::time(0));
+    auto backups_build = root_b.initBackups(1);
+    backups_build.set(0, backup_hash.kjp());
+    *root_hash = root_msg.hash();
+    db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
+  }
+
+  cout << "storing root: " << *root_hash << endl;
+  string rootstr("ROOT");
+  db.put((uint8_t*)&rootstr[0], root_hash->ptr(), rootstr.size(), root_hash->size());
+}
+
+void list_backups() {
+  auto root_hash = get_root_hash();
+  if (!root_hash)
+    throw StringException("No root");
+  auto backups = get_backups(*root_hash);
+
+}
 
 struct Archiver {
   DB db;
@@ -465,7 +542,7 @@ int main(int argc, char **argv) {
       return -1;
     }
     
-    read_backup();
+    list_backups();
   }
 
   if (command == "filelist") {
