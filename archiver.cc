@@ -376,6 +376,35 @@ vector<Backup> get_backups(Bytes root_hash) {
   return returns;
 }
 
+Bytes *get_file(Bytes hash, int len) {
+  auto data = db.get(hash);
+  if (!data)
+    StringException("file not found");
+  
+  auto output = new Bytes(len);
+  len = LZ4_decompress_safe (data->ptr<const char*>(), output->ptr<char *>(), data->size(), len);
+  return output;
+}
+
+void recurse(Bytes hash, string dir_name = "/") {
+  auto dir_data = db.get(hash);
+  ::capnp::FlatArrayMessageReader flat_reader(*dir_data);
+  auto r = flat_reader.getRoot<cap::Dir>();
+  cout << "d " << dir_name << " " << r.getSize() << endl;
+  for (auto entry : r.getEntries()) {
+    if (entry.isFile()) {
+      if (entry.getName() == "README.md") {
+        auto data = get_file(entry.getHash(), entry.getSize());
+        for (auto b : *data)
+          cout << b;
+      }
+      cout << "f " << (dir_name + string(entry.getName())) << " " << entry.getSize() << " " << entry.getHash() << endl;
+    }
+    if (entry.isDir())
+      recurse(entry.getHash(), dir_name + string(entry.getName()) + "/");
+  }
+}
+
 void backup(GFile *path, string backup_name, string backup_description) {
   auto [dir_hash, backup_size] = enumerate(path, path);
   //we have root hash and size
@@ -462,12 +491,35 @@ void backup(GFile *path, string backup_name, string backup_description) {
   db.put((uint8_t*)&rootstr[0], root_hash->ptr(), rootstr.size(), root_hash->size());
 }
 
+string timestring(uint64_t timestamp) {
+ std::tm * ptm = std::localtime((time_t*)&timestamp);
+ char buffer[32];
+ // Format: Mo, 15.06.2009 20:20:00
+ std::strftime(buffer, 32, "%a, %d.%m.%Y %H:%M:%S", ptm); 
+ return string(buffer, 32);
+}
+
 void list_backups() {
   auto root_hash = get_root_hash();
   if (!root_hash)
     throw StringException("No root");
   auto backups = get_backups(*root_hash);
+  for (auto &b : backups)
+    cout << b.name << " " << b.size << " " << timestring(b.timestamp) << endl;
+}
 
+void list_files(string backup_name) {
+    auto root_hash = get_root_hash();
+  if (!root_hash)
+    throw StringException("No root");
+  auto backups = get_backups(*root_hash);
+  for (auto &b : backups) {
+    cout << b.name << " " << backup_name << endl;
+    if (b.name == backup_name) {
+      cout << "found " << b.name << " with hash " << b.hash << endl;
+      recurse(b.hash);
+    }
+  }
 }
 
 struct Archiver {
@@ -557,7 +609,7 @@ int main(int argc, char **argv) {
       return -1;
     }
     
-    
+    list_files(argv[2]);
   }
     
 
