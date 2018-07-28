@@ -6,6 +6,7 @@
 #include <lz4.h>
 #include <ctime>
 
+#include <functional>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -39,7 +40,7 @@ enum Overwrite {
 
 struct DB {
   DB() {
-    cout << "opening" << endl;
+    cerr << "opening" << endl;
     c(mdb_env_create(&env));
     c(mdb_env_set_mapsize(env, size_t(1) << 40)); // One TB
     //c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR, 0664));
@@ -224,12 +225,12 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
 
     //skip special files, like sockets
     if (file_type == G_FILE_TYPE_SPECIAL) {
-      cout << "SKIPPING SPECIAL FILE: " << base_name << endl;
+      cerr << "SKIPPING SPECIAL FILE: " << base_name << endl;
       continue;
     }
 
     if (string("archiver.db") == base_name) {
-      cout << "SKIPPING DATABASE FILE: " << base_name << endl;
+      cerr << "SKIPPING DATABASE FILE: " << base_name << endl;
       continue;
     }
 
@@ -245,7 +246,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
     }
 
     goffset filesize = g_file_info_get_size(finfo);
-    cout << relative_path << " " << filesize << endl;
+    cerr << relative_path << " " << filesize << endl;
     if (filesize > 1024*1024*128) { //on first pass ignore huge files
       logfile << "skipping: " << relative_path << " " << filesize << endl;
       continue;
@@ -259,11 +260,11 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       cerr << "Read Error: " << g_file_get_path(child) << endl;
       continue;
     }
-    cout << "len: " << len << endl;
+    cerr << "len: " << len << endl;
     
     Bytes hash = get_hash((uint8_t*)data, len);
 
-    cout << hash << endl;
+    cerr << hash << endl;
 
     /*
     //compress the file and see how much you compress it
@@ -293,7 +294,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
     // cout << g_file_info_get_name(finfo) << endl;
 
     
-    cout << "total:" << total_size << endl;
+    cerr << "total:" << total_size << endl;
     g_assert(relative_path != NULL);
     g_free(relative_path);
     g_free(base_name);
@@ -364,7 +365,7 @@ Bytes *get_root_hash() {
 
 vector<Backup> get_backups(Bytes root_hash) {
   vector<Backup> returns;
-  cout << root_hash << endl;
+  cerr << root_hash << endl;
   auto root = db.get(root_hash);
   if (!root)
     throw StringException("root not found");
@@ -373,7 +374,7 @@ vector<Backup> get_backups(Bytes root_hash) {
   auto r = flat_reader.getRoot<cap::Root>();
 
   auto backups = r.getBackups();
-  cout << backups.size() << endl;
+  cerr << backups.size() << endl;
   
   for (auto b : backups) {
     Backup backup;
@@ -402,22 +403,20 @@ Bytes *get_file(Bytes hash, int len) {
   //return output;
 }
 
-void recurse(Bytes hash, string dir_name = "/") {
+void print_entry(cap::Entry::Reader& entry, string &full_name) {
+  cerr << "f " << full_name << " " << entry.getSize() << " " << entry.getHash() << endl;
+}
+
+void recurse(Bytes hash, std::function<void(cap::Entry::Reader&, string&)> func = print_entry, string dir_name = "/") {
   auto dir_data = db.get(hash);
   ::capnp::FlatArrayMessageReader flat_reader(*dir_data);
   auto r = flat_reader.getRoot<cap::Dir>();
-  cout << "d " << dir_name << " " << r.getSize() << endl;
+  //cout << "d " << dir_name << " " << r.getSize() << endl;
   for (auto entry : r.getEntries()) {
-    if (entry.isFile()) {
-      if (entry.getName() == "README.md") {
-        auto data = get_file(entry.getHash(), entry.getSize());
-        for (auto b : *data)
-          cout << b;
-      }
-      cout << "f " << (dir_name + string(entry.getName())) << " " << entry.getSize() << " " << entry.getHash() << endl;
-    }
+    string full_name = dir_name + string(entry.getName());
+    func(entry, full_name);
     if (entry.isDir())
-      recurse(entry.getHash(), dir_name + string(entry.getName()) + "/");
+      recurse(entry.getHash(), func, dir_name + string(entry.getName()) + "/");
   }
 }
 
@@ -425,7 +424,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
   auto [dir_hash, backup_size] = enumerate(path, path);
   //we have root hash and size
   //save the root
-  cout << "root dir hash: " << dir_hash << " size:" << backup_size << endl;
+  cerr << "root dir hash: " << dir_hash << " size:" << backup_size << endl;
 
   // Get current root if there is one
   auto root_hash = get_root_hash();
@@ -435,7 +434,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
     int n(0);
     for (auto &b : backups) {
       if (b.name == backup_name) {
-        cout << "found backup name, replacing" << endl;
+        cerr << "found backup name, replacing" << endl;
         backups.erase(backups.begin() + n);
         break;
       }
@@ -477,7 +476,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
     db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
     
   } else {
-    cout << "no current root found" << endl;
+    cerr << "no current root found" << endl;
     Message msg;
     auto b = msg.build<cap::Backup>();
     b.setName(backup_name);
@@ -487,7 +486,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
     b.setTimestamp(std::time(0));
     
     auto backup_hash = msg.hash();
-    cout << "hash: " << backup_hash << " " << msg.size() << endl;
+    cerr << "hash: " << backup_hash << " " << msg.size() << endl;
     msg.data();
     msg.size();
     db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
@@ -502,7 +501,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
     db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
   }
 
-  cout << "storing root: " << *root_hash << endl;
+  cerr << "storing root: " << *root_hash << endl;
   string rootstr("ROOT");
   db.put((uint8_t*)&rootstr[0], root_hash->ptr(), rootstr.size(), root_hash->size());
 }
@@ -521,21 +520,47 @@ void list_backups() {
     throw StringException("No root");
   auto backups = get_backups(*root_hash);
   for (auto &b : backups)
-    cout << b.name << " " << b.size << " " << timestring(b.timestamp) << endl;
+    cerr << b.name << " " << b.size << " " << timestring(b.timestamp) << endl;
 }
 
 void list_files(string backup_name) {
-    auto root_hash = get_root_hash();
+  auto root_hash = get_root_hash();
   if (!root_hash)
     throw StringException("No root");
   auto backups = get_backups(*root_hash);
   for (auto &b : backups) {
-    cout << b.name << " " << backup_name << endl;
+    cerr << b.name << " " << backup_name << endl;
     if (b.name == backup_name) {
-      cout << "found " << b.name << " with hash " << b.hash << endl;
+      cerr << "found " << b.name << " with hash " << b.hash << endl;
       recurse(b.hash);
     }
   }
+}
+
+void output_file(string backup_name, string full_name) {
+  auto f = [full_name](cap::Entry::Reader& entry, string &full_name_){
+    if (entry.isFile()) {
+      //cout << full_name_ << endl;
+      if (full_name == full_name_) {
+        auto data = get_file(entry.getHash(), entry.getSize());
+        for (auto b : *data)
+          cout << b;
+      } 
+    }
+  };  
+
+  auto root_hash = get_root_hash();
+  if (!root_hash)
+    throw StringException("No root");
+  auto backups = get_backups(*root_hash);
+  for (auto &b : backups) {
+    cerr << b.name << " " << backup_name << endl;
+    if (b.name == backup_name) {
+      cerr << "found " << b.name << " with hash " << b.hash << endl;
+      recurse(b.hash, f);
+    }
+  }
+
 }
 
 struct Archiver {
@@ -628,5 +653,11 @@ int main(int argc, char **argv) {
     list_files(argv[2]);
   }
     
-
+  if (command == "output") {
+    if (argc != 4) {
+      cerr << "usage: " << argv[0] << " " << command << " [backup name] [file name]" << endl;
+      return -1;
+    }
+    output_file(argv[2], argv[3]);
+  }
 }
