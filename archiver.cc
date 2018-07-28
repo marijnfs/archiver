@@ -6,6 +6,7 @@
 #include <lz4.h>
 #include <ctime>
 
+#include <fstream>
 #include <string>
 #include <vector>
 #include <tuple>
@@ -41,7 +42,9 @@ struct DB {
     cout << "opening" << endl;
     c(mdb_env_create(&env));
     c(mdb_env_set_mapsize(env, size_t(1) << 40)); // One TB
-    c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR, 0664));
+    //c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR, 0664));
+    c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR | MDB_WRITEMAP | MDB_MAPASYNC, 0664));
+    
     c(mdb_txn_begin(env, NULL, 0, &txn));
     c(mdb_dbi_open(txn, NULL, MDB_CREATE, &dbi));
     // char *bla = " ";
@@ -51,7 +54,10 @@ struct DB {
     // cout << "done" << endl;
   }
 
-  ~DB() { mdb_dbi_close(env, dbi); }
+  ~DB() { 
+    mdb_env_sync(env, 1);
+    mdb_dbi_close(env, dbi); 
+  }
 
   //put function for vector types
   template <typename T, typename D>
@@ -84,7 +90,7 @@ struct DB {
     if (result == MDB_NOTFOUND)
       return 0;
     auto ret_val = new Bytes(reinterpret_cast<uint8_t *>(mdata.mv_data),
-                                            reinterpret_cast<uint8_t *>(mdata.mv_data) +
+                             reinterpret_cast<uint8_t *>(mdata.mv_data) +
                                             mdata.mv_size);
     
     return ret_val;
@@ -179,6 +185,7 @@ struct Message {
   kj::Array<capnp::word> wdata = 0;
 };
 
+
 tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   vector<uint8_t> dir_hash(HASH_BYTES);
 
@@ -198,6 +205,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   vector<bool> is_dir;
 
   uint64_t total_size(0);
+  static ofstream logfile("log.txt");
 
   while (TRUE) {
     GFile *child;
@@ -220,7 +228,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       continue;
     }
 
-    if (string("testdb") == base_name) {
+    if (string("archiver.db") == base_name) {
       cout << "SKIPPING DATABASE FILE: " << base_name << endl;
       continue;
     }
@@ -236,7 +244,14 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       continue;
     }
 
-    
+    goffset filesize = g_file_info_get_size(finfo);
+    cout << relative_path << " " << filesize << endl;
+    if (filesize > 1024*1024*128) { //on first pass ignore huge files
+      logfile << "skipping: " << relative_path << " " << filesize << endl;
+      continue;
+    }
+    //calculate its hash
+          
     //if we are here this should be a regular file, read it
     gchar *data = 0;
     gsize len(0);
@@ -244,12 +259,13 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       cerr << "Read Error: " << g_file_get_path(child) << endl;
       continue;
     }
+    cout << "len: " << len << endl;
     
-    //calculate its hash
     Bytes hash = get_hash((uint8_t*)data, len);
 
     cout << hash << endl;
 
+    /*
     //compress the file and see how much you compress it
     const int max_compressed_len = LZ4_compressBound(len);
     // We will use that size for our destination boundary when allocating space.
@@ -261,23 +277,23 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
 
     total_uncompressed += len;
     total_compressed += compressed_data_len;
+    */
 
     names.push_back(base_name);
     hashes.push_back(hash);
     sizes.push_back(len);
     is_dir.push_back(false);
     total_size += len;
-
+    
     
     if (!ONLY_ARCHIVE)
-      db.put(hash, compressed_data, NOOVERWRITE); //store compressed file in database
+      db.put(hash.ptr(), (uint8_t*)data, hash.size(), len, NOOVERWRITE); //store compressed file in database
+    //db.put(hash, compressed_data, NOOVERWRITE); //store compressed file in database
     g_free(data);
     // cout << g_file_info_get_name(finfo) << endl;
 
-    cout << relative_path << " " << len << " " << compressed_data_len << " "
-         << (static_cast<double>(total_uncompressed) / total_compressed)
-         << endl;
-    cout << total_uncompressed << " " << total_compressed << endl;
+    
+    cout << "total:" << total_size << endl;
     g_assert(relative_path != NULL);
     g_free(relative_path);
     g_free(base_name);
@@ -380,10 +396,10 @@ Bytes *get_file(Bytes hash, int len) {
   auto data = db.get(hash);
   if (!data)
     StringException("file not found");
-  
-  auto output = new Bytes(len);
-  len = LZ4_decompress_safe (data->ptr<const char*>(), output->ptr<char *>(), data->size(), len);
-  return output;
+  return data;
+  //auto output = new Bytes(len);
+  //len = LZ4_decompress_safe (data->ptr<const char*>(), output->ptr<char *>(), data->size(), len);
+  //return output;
 }
 
 void recurse(Bytes hash, string dir_name = "/") {
