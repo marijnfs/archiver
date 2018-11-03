@@ -18,7 +18,7 @@ struct Dir {
 struct Root {
     name @0 : Text;
     description @1 : Text;
-    size @2 : UIint64;
+    size @2 : UInt64;
     hash @3 : Data;
 }
 
