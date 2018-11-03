@@ -1,9 +1,12 @@
 @0xaff13c93205b1f69;
 
+using Cxx = import "/capnp/c++.capnp";
+$Cxx.namespace("cap");
+
 struct Entry {
-    name @0 : Text;
-    size @1 : UInt64;
-    hash @2 : Data;
+    name @0 : Text; #file/dir name
+    size @1 : UInt64; #byte size of data (uncompressed)
+    hash @2 : Data; #hash of uncompressed file
     union {
         file @3 : Void;
         dir @4 : Void;
@@ -12,23 +15,20 @@ struct Entry {
 
 struct Dir {
     entries @0 : List(Entry);
-    size @1 : UInt64;
-}
-
-struct Root {
-    name @0 : Text;
-    description @1 : Text;
-    size @2 : UInt64;
-    hash @3 : Data;
+    size @1 : UInt64; #byte size of data
 }
 
 struct Backup {
-    description @0 : Text;
-    root @1 : Data;
-    timestamp @2 : UInt64;
+    name @0 : Text;
+    description @1 : Text; #option for description
+    size @2 : UInt64;  #size of total original file size
+    hash @3 : Data;
+    timestamp @4 : UInt64;
 }
 
-struct Backups {
-    roots @0 : List(Data);
-    lastBackups @1 : Data;
+#root backup struct to store pointers to current backups
+struct Root {
+    backups @0 : List(Data);
+    lastRoot @1 : Data; #hash of last backups object
+    timestamp @2 : UInt64;
 }
