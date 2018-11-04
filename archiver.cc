@@ -17,123 +17,27 @@
 //#include "serialise.h"
 #include "files.capnp.h"
 #include "bytes.h"
+#include "db.h"
 
 using namespace std;
 
 string path = "./";
-char *DBNAME = "archiver.db";
 uint8_t key[BLAKE2B_KEYBYTES];
 uint HASH_BYTES(32);
 bool ONLY_ARCHIVE(true);
 
-struct StringException : public std::exception {
-  std::string str;
-  StringException(std::string msg_) : str(msg_) {}
+//uint64_t MAX_FILESIZE = 1024*1024*128;
+uint64_t MAX_FILESIZE = 0;
 
-  const char *what() const noexcept { return str.c_str(); }
-};
 
-enum Overwrite {
-  OVERWRITE = 0,
-  NOOVERWRITE = 1
-};
 
-struct DB {
-  DB() {
-    cerr << "opening" << endl;
-    c(mdb_env_create(&env));
-    c(mdb_env_set_mapsize(env, size_t(1) << 40)); // One TB
-    //c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR, 0664));
-    c(mdb_env_open(env, DBNAME, MDB_NOSUBDIR | MDB_WRITEMAP | MDB_MAPASYNC, 0664));
-    
-    c(mdb_txn_begin(env, NULL, 0, &txn));
-    c(mdb_dbi_open(txn, NULL, MDB_CREATE, &dbi));
-    // char *bla = " ";
-    // MDB_val mkey{1, bla}, mdata{1, bla};
-    // c( mdb_put(txn, *dbi, &mkey, &mdata, 0) );
-    c(mdb_txn_commit(txn));
-    // cout << "done" << endl;
-  }
-
-  ~DB() { 
-    mdb_env_sync(env, 1);
-    mdb_dbi_close(env, dbi); 
-  }
-
-  //put function for vector types
-  template <typename T, typename D>
-  bool put(std::vector<T> &key, vector<D> &data, Overwrite overwrite = OVERWRITE) {
-    return put(reinterpret_cast<uint8_t *>(&key[0]),
-        reinterpret_cast<uint8_t *>(&data[0]), key.size() * sizeof(T),
-        data.size() * sizeof(D), overwrite);
-  }
-
-  //classic byte pointer put function
-  bool put(uint8_t *key, uint8_t *data, size_t key_len, size_t data_len, Overwrite overwrite = OVERWRITE) {
-    MDB_val mkey{key_len, key}, mdata{data_len, data};
-
-    c(mdb_txn_begin(env, NULL, 0, &txn));
-    int result = mdb_put(txn, dbi, &mkey, &mdata, (overwrite == NOOVERWRITE) ? MDB_NOOVERWRITE : 0);
-    c(mdb_txn_commit(txn));
-    if (result == MDB_KEYEXIST)
-      return false;
-
-    c(result);
-    return true;
-  }
-
-  Bytes *get(uint8_t *ptr, size_t len) {
-    MDB_val mkey{len, ptr};
-    MDB_val mdata;
-    c(mdb_txn_begin(env, NULL, 0, &txn));
-    int result = mdb_get(txn, dbi, &mkey, &mdata);
-    c(mdb_txn_commit(txn));
-    if (result == MDB_NOTFOUND)
-      return 0;
-    auto ret_val = new Bytes(reinterpret_cast<uint8_t *>(mdata.mv_data),
-                             reinterpret_cast<uint8_t *>(mdata.mv_data) +
-                                            mdata.mv_size);
-    
-    return ret_val;
-  }
-
-  Bytes *get(std::vector<uint8_t> &key) {
-    return get(&key[0], key.size());
-  }
-
-  bool has(std::vector<uint8_t> &key) {
-    MDB_val mkey{key.size(), &key[0]};
-    MDB_val mdata;
-    c(mdb_txn_begin(env, NULL, 0, &txn));
-    int result = mdb_get(txn, dbi, &mkey, &mdata);
-    c(mdb_txn_commit(txn));
-    return result != MDB_NOTFOUND;
-  }
-
-  void copy_db(string path) {
-    c(mdb_env_copy2(env, path.c_str(), MDB_CP_COMPACT));
-  }
-
-  int rc;
-  MDB_env *env = 0;
-  MDB_dbi dbi;
-  MDB_txn *txn = 0;
-
-  //check function
-  void c(int rc) {
-    if (rc != 0) {
-      fprintf(stderr, "txn->commit: (%d) %s\n", rc, mdb_strerror(rc));
-      throw StringException("db error");
-    }
-  }
-};
 
 DB db;
 
 
 uint64_t total_uncompressed(0), total_compressed(0);
 
-Bytes get_hash(uint8_t *ptr, int len) {
+Bytes get_hash(uint8_t *ptr, uint64_t len) {
     Bytes hash(HASH_BYTES);
     if (blake2b(&hash[0], ptr, key, HASH_BYTES, len, BLAKE2B_KEYBYTES) < 0)
       throw StringException("hash problem");
@@ -197,7 +101,9 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       file, "*", G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL, &error);
 
   if (error != NULL) {
-    throw StringException(error->message);
+    cerr << error->message << endl;
+    tuple<Bytes, uint64_t>(Bytes(), 0);
+    //throw StringException(error->message);
   }
 
   vector<string> names;
@@ -247,7 +153,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
 
     goffset filesize = g_file_info_get_size(finfo);
     cerr << relative_path << " " << filesize << endl;
-    if (filesize > 1024*1024*128) { //on first pass ignore huge files
+    if (MAX_FILESIZE && filesize > MAX_FILESIZE) { //on first pass ignore huge files
       logfile << "skipping: " << relative_path << " " << filesize << endl;
       continue;
     }
@@ -393,7 +299,7 @@ vector<Backup> get_backups(Bytes root_hash) {
   return returns;
 }
 
-Bytes *get_file(Bytes hash, int len) {
+Bytes *get_file(Bytes hash, uint64_t len) {
   auto data = db.get(hash);
   if (!data)
     StringException("file not found");
@@ -421,85 +327,61 @@ void recurse(Bytes hash, std::function<void(cap::Entry::Reader&, string&)> func 
 }
 
 void backup(GFile *path, string backup_name, string backup_description) {
+  //Run through files performing the actual backup
   auto [dir_hash, backup_size] = enumerate(path, path);
+
   //we have root hash and size
   //save the root
   cerr << "root dir hash: " << dir_hash << " size:" << backup_size << endl;
 
   // Get current root if there is one
+  vector<Backup> backups;
+
   auto root_hash = get_root_hash();
   if (root_hash) {
-    auto backups = get_backups(*root_hash);
-    bool replaced(false);
-    int n(0);
-    for (auto &b : backups) {
-      if (b.name == backup_name) {
-        cerr << "found backup name, replacing" << endl;
-        backups.erase(backups.begin() + n);
-        break;
-      }
-      ++n;
-    }
-    if (!replaced) {
-      Backup b;
-      b.name = backup_name;
-      b.description = backup_description;
-      b.size = backup_size;
-      b.timestamp = std::time(0);
-      b.hash = dir_hash;
-      backups.push_back(b);
-    }
-    
-
-    Message root_msg;
-    auto root_b = root_msg.build<cap::Root>();
-    root_b.setTimestamp(std::time(0));
-    auto backups_build = root_b.initBackups(backups.size());
-    n = 0;
-    for (auto &backup : backups) {
-        Message msg;
-        auto b = msg.build<cap::Backup>();
-        b.setName(backup.name);
-        b.setDescription(backup.description);
-        b.setHash(backup.hash.kjp());
-        b.setSize(backup.size);
-        b.setTimestamp(backup.timestamp);
-        
-        auto backup_hash = msg.hash();
-        db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
-        backups_build.set(n, backup_hash.kjp());
-        ++n;
-    }
-    
-    root_b.setLastRoot(root_hash->kjp());
-    *root_hash = root_msg.hash();
-    db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
-    
-  } else {
-    cerr << "no current root found" << endl;
-    Message msg;
-    auto b = msg.build<cap::Backup>();
-    b.setName(backup_name);
-    b.setDescription(backup_description);
-    b.setHash(dir_hash.kjp());
-    b.setSize(backup_size);
-    b.setTimestamp(std::time(0));
-    
-    auto backup_hash = msg.hash();
-    cerr << "hash: " << backup_hash << " " << msg.size() << endl;
-    msg.data();
-    msg.size();
-    db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
-        
-    Message root_msg;
-    auto root_b = root_msg.build<cap::Root>();
-    root_b.setTimestamp(std::time(0));
-    auto backups_build = root_b.initBackups(1);
-    backups_build.set(0, backup_hash.kjp());
-    
-    root_hash = new Bytes(root_msg.hash());
-    db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
+    auto prev_backups = get_backups(*root_hash);
+    copy(prev_backups.begin(), prev_backups.end(), backups.begin());
   }
+ 
+  {
+    Backup b;
+    b.name = backup_name;
+    b.description = backup_description;
+    b.size = backup_size;
+    b.timestamp = std::time(0);
+    b.hash = dir_hash;
+    backups.push_back(b);
+  }
+  
+
+  Message root_msg;
+  auto root_b = root_msg.build<cap::Root>();
+  root_b.setTimestamp(std::time(0));
+  auto backups_build = root_b.initBackups(backups.size());
+
+  int n(0);
+  for (auto &backup : backups) {
+      Message msg;
+      auto b = msg.build<cap::Backup>();
+      b.setName(backup.name);
+      b.setDescription(backup.description);
+      b.setHash(backup.hash.kjp());
+      b.setSize(backup.size);
+      b.setTimestamp(backup.timestamp);
+      
+      auto backup_hash = msg.hash();
+      db.put(&backup_hash[0], msg.data(), backup_hash.size(), msg.size());
+      backups_build.set(n, backup_hash.kjp());
+      ++n;
+  }
+  
+  if (root_hash) {
+    cout << "LAST ROOT: " << *root_hash << endl;
+    root_b.setLastRoot(root_hash->kjp());
+    cout << "new number of backups: " << backups.size() << endl;
+  }
+  *root_hash = root_msg.hash();
+  db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
 
   cerr << "storing root: " << *root_hash << endl;
   string rootstr("ROOT");
