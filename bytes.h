@@ -11,12 +11,7 @@
 #include <capnp/serialize.h>
 
 //typedef std::vector<uint8_t> Bytes;
-struct StringException : public std::exception {
-  std::string str;
-  StringException(std::string msg_) : str(msg_) {}
 
-  const char *what() const noexcept { return str.c_str(); }
-};
 
 struct Bytes : public std::vector<uint8_t> {
   Bytes() {}

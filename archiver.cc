@@ -14,10 +14,13 @@
 #include <capnp/message.h>
 #include <capnp/serialize.h>
 #include <capnp/serialize-packed.h>
+
+
 //#include "serialise.h"
 #include "files.capnp.h"
 #include "bytes.h"
 #include "db.h"
+#include "util.h"
 
 using namespace std;
 
@@ -43,6 +46,9 @@ Bytes get_hash(uint8_t *ptr, uint64_t len) {
       throw StringException("hash problem");
     return hash;
 }
+
+
+
 /*
 struct RMessage {
   RMessage(Bytes &b) : flat_reader(b.kjwp()) {
@@ -71,7 +77,7 @@ struct Message {
     return (uint8_t*) &wdata[0];
   }
 
-  int size() {
+  uint64_t size() {
     serialise();
     return wdata.asBytes().size();
   }
@@ -340,7 +346,7 @@ void backup(GFile *path, string backup_name, string backup_description) {
   auto root_hash = get_root_hash();
   if (root_hash) {
     auto prev_backups = get_backups(*root_hash);
-    copy(prev_backups.begin(), prev_backups.end(), backups.begin());
+    copy(prev_backups.begin(), prev_backups.end(), back_inserter(backups));
   }
  
   {
@@ -380,12 +386,12 @@ void backup(GFile *path, string backup_name, string backup_description) {
     root_b.setLastRoot(root_hash->kjp());
     cout << "new number of backups: " << backups.size() << endl;
   }
-  *root_hash = root_msg.hash();
-  db.put(root_hash->ptr(), root_msg.data(), root_hash->size(), root_msg.size());
+  auto new_root_hash = root_msg.hash();
+  db.put(new_root_hash.ptr(), root_msg.data(), new_root_hash.size(), root_msg.size());
 
-  cerr << "storing root: " << *root_hash << endl;
+  cerr << "storing root: " << new_root_hash << endl;
   string rootstr("ROOT");
-  db.put((uint8_t*)&rootstr[0], root_hash->ptr(), rootstr.size(), root_hash->size());
+  db.put((uint8_t*)&rootstr[0], new_root_hash.ptr(), rootstr.size(), new_root_hash.size());
 }
 
 string timestring(uint64_t timestamp) {
@@ -402,7 +408,7 @@ void list_backups() {
     throw StringException("No root");
   auto backups = get_backups(*root_hash);
   for (auto &b : backups)
-    cerr << b.name << " " << b.size << " " << timestring(b.timestamp) << endl;
+    cerr << b.name << " " << b.size << " " << user_readable_size(b.size) << " " << timestring(b.timestamp) << endl;
 }
 
 void list_files(string backup_name) {
@@ -541,5 +547,9 @@ int main(int argc, char **argv) {
       return -1;
     }
     output_file(argv[2], argv[3]);
+  }
+
+  if (command == "stats") {
+    db.print_stat();
   }
 }

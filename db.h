@@ -5,6 +5,7 @@
 #include <vector>
 #include <iostream>
 
+#include "util.h"
 #include "bytes.h"
 
 char *DBNAME = "archiver.db";
@@ -46,7 +47,8 @@ struct DB {
   }
 
   //classic byte pointer put function
-  bool put(uint8_t *key, uint8_t *data, size_t key_len, size_t data_len, Overwrite overwrite = OVERWRITE) {
+  bool put(uint8_t *key, uint8_t *data, uint64_t key_len, uint64_t data_len, Overwrite overwrite = OVERWRITE) {
+    std::cerr << key_len << " " << data_len << std::endl;
     MDB_val mkey{key_len, key}, mdata{data_len, data};
 
     c(mdb_txn_begin(env, NULL, 0, &txn));
@@ -59,7 +61,7 @@ struct DB {
     return true;
   }
 
-  Bytes *get(uint8_t *ptr, size_t len) {
+  Bytes *get(uint8_t *ptr, uint64_t len) {
     MDB_val mkey{len, ptr};
     MDB_val mdata;
     c(mdb_txn_begin(env, NULL, 0, &txn));
@@ -89,6 +91,22 @@ struct DB {
 
   void copy_db(std::string path) {
     c(mdb_env_copy2(env, path.c_str(), MDB_CP_COMPACT));
+  }
+
+  void print_stat() {
+    MDB_stat stat;
+    c(mdb_txn_begin(env, NULL, 0, &txn));
+    mdb_stat(txn, dbi, &stat);
+    auto db_size = stat.ms_psize * (stat.ms_leaf_pages + stat.ms_branch_pages + stat.ms_overflow_pages);
+    std::cout << "size: " << db_size << " " << user_readable_size(db_size) << std::endl;
+    
+    printf("  Page size: %u\n", stat.ms_psize);
+    printf("  Tree depth: %u\n", stat.ms_depth);
+    printf("  Branch pages: %zu\n", stat.ms_branch_pages);
+    printf("  Leaf pages: %zu\n", stat.ms_leaf_pages);
+    printf("  Overflow pages: %zu\n", stat.ms_overflow_pages);
+    printf("  Entries: %zu\n", stat.ms_entries);
+
   }
 
   int rc;
