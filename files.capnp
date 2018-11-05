@@ -10,6 +10,7 @@ struct Entry {
     union {
         file @3 : Void;
         dir @4 : Void;
+        multi @5 : Void;
     }
 }
 
@@ -17,6 +18,11 @@ struct Dir {
     entries @0 : List(Entry);
     size @1 : UInt64; #byte size of data
 }
+
+struct MultiPart {
+    parts @0 : List(Data); #list of hashes to the parts (each 2GB max)
+}
+
 
 struct Backup {
     name @0 : Text;

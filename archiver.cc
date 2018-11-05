@@ -29,11 +29,8 @@ uint8_t key[BLAKE2B_KEYBYTES];
 uint HASH_BYTES(32);
 bool ONLY_ARCHIVE(true);
 
-//uint64_t MAX_FILESIZE = 1024*1024*128;
 uint64_t MAX_FILESIZE = 0;
-
-
-
+uint64_t MULTIPART_SIZE(uint64_t(2) << 30);
 
 DB db;
 
@@ -116,6 +113,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   vector<uint64_t> sizes;
   vector<Bytes> hashes;
   vector<bool> is_dir;
+  vector<bool> is_multi;
 
   uint64_t total_size(0);
   static ofstream logfile("log.txt");
@@ -153,6 +151,7 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       hashes.push_back(hash);
       sizes.push_back(n);
       is_dir.push_back(true);
+      is_multi.push_back(false);
       total_size += n;
       continue;
     }
@@ -163,48 +162,104 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       logfile << "skipping: " << relative_path << " " << filesize << endl;
       continue;
     }
-    //calculate its hash
-          
-    //if we are here this should be a regular file, read it
-    gchar *data = 0;
-    gsize len(0);
-    if (!g_file_get_contents(g_file_get_path(child), &data, &len, &error)) {
-      cerr << "Read Error: " << g_file_get_path(child) << endl;
-      continue;
+
+    if (filesize > MULTIPART_SIZE) { //Too big for direct storage, Multipart file
+      cout << "writing multipart" << endl;
+      vector<uint8_t> data(MULTIPART_SIZE);
+      auto input_stream = g_file_read (child, NULL, &error);
+      if (error != NULL) {
+        throw StringException(error->message);
+      }
+
+      vector<Bytes> hashes;
+      gsize len(0);
+      while (true) {
+        gsize bytes_read = g_input_stream_read (G_INPUT_STREAM(input_stream),
+                       (void*)&data[0],
+                       MULTIPART_SIZE,
+                       NULL,
+                       &error);
+        if (error != NULL) {
+          throw StringException(error->message);
+        }
+        if (bytes_read == 0)
+          break;
+        len += bytes_read;
+
+        Bytes hash = get_hash((uint8_t*)&data[0], bytes_read);
+        hashes.push_back(hash);
+
+        if (!ONLY_ARCHIVE) {
+          cout << "putting multipart: " << hash << " len: " << bytes_read << endl;
+          db.put(hash.ptr(), (uint8_t*)&data[0], hash.size(), bytes_read, NOOVERWRITE); //store compressed file in database
+        }
+
+      }
+
+      Message multipart_msg;
+      auto mb = multipart_msg.build<cap::MultiPart>();
+      auto pb = mb.initParts(hashes.size());
+      for (int i(0); i < hashes.size(); ++i) {
+        pb.set(i, hashes[i].kjp());
+      }
+      auto multipart_hash = multipart_msg.hash();
+      if (!ONLY_ARCHIVE) {
+        cout << "putting multipart object: " << multipart_hash << endl;
+        db.put(multipart_hash.ptr(), multipart_msg.data(), multipart_hash.size(), multipart_msg.size(), NOOVERWRITE); //store compressed file in database
+      }
+
+      names.push_back(base_name);
+      hashes.push_back(multipart_hash);
+      sizes.push_back(len);
+      is_dir.push_back(false);
+      is_multi.push_back(true);
+      total_size += len;
+
+      g_free(input_stream);
+    } else {
+      //calculate its hash
+            
+      //if we are here this should be a regular file, read it
+      gchar *data = 0;
+      gsize len(0);
+      if (!g_file_get_contents(g_file_get_path(child), &data, &len, &error)) {
+        cerr << "Read Error: " << g_file_get_path(child) << endl;
+        continue;
+      }
+      cerr << "len: " << len << endl;
+      
+      Bytes hash = get_hash((uint8_t*)data, len);
+
+      cerr << hash << endl;
+
+      /*
+      //compress the file and see how much you compress it
+      const int max_compressed_len = LZ4_compressBound(len);
+      // We will use that size for our destination boundary when allocating space.
+      vector<char> compressed_data(max_compressed_len);
+      const int compressed_data_len = LZ4_compress_default(
+          data, &compressed_data[0], len, max_compressed_len);
+      if (compressed_data_len < 0)
+        throw StringException("compression failed");
+
+      total_uncompressed += len;
+      total_compressed += compressed_data_len;
+      */
+
+      names.push_back(base_name);
+      hashes.push_back(hash);
+      sizes.push_back(len);
+      is_dir.push_back(false);
+      is_multi.push_back(false);
+      total_size += len;
+      
+    
+      if (!ONLY_ARCHIVE)
+        db.put(hash.ptr(), (uint8_t*)data, hash.size(), len, NOOVERWRITE); //store compressed file in database
+      //db.put(hash, compressed_data, NOOVERWRITE); //store compressed file in database
+      g_free(data);
+      // cout << g_file_info_get_name(finfo) << endl;
     }
-    cerr << "len: " << len << endl;
-    
-    Bytes hash = get_hash((uint8_t*)data, len);
-
-    cerr << hash << endl;
-
-    /*
-    //compress the file and see how much you compress it
-    const int max_compressed_len = LZ4_compressBound(len);
-    // We will use that size for our destination boundary when allocating space.
-    vector<char> compressed_data(max_compressed_len);
-    const int compressed_data_len = LZ4_compress_default(
-        data, &compressed_data[0], len, max_compressed_len);
-    if (compressed_data_len < 0)
-      throw StringException("compression failed");
-
-    total_uncompressed += len;
-    total_compressed += compressed_data_len;
-    */
-
-    names.push_back(base_name);
-    hashes.push_back(hash);
-    sizes.push_back(len);
-    is_dir.push_back(false);
-    total_size += len;
-    
-    
-    if (!ONLY_ARCHIVE)
-      db.put(hash.ptr(), (uint8_t*)data, hash.size(), len, NOOVERWRITE); //store compressed file in database
-    //db.put(hash, compressed_data, NOOVERWRITE); //store compressed file in database
-    g_free(data);
-    // cout << g_file_info_get_name(finfo) << endl;
-
     
     cerr << "total:" << total_size << endl;
     g_assert(relative_path != NULL);
@@ -229,6 +284,8 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
     b.setHash(kj::arrayPtr(&hashes[n][0], hashes[n].size()));
     if (is_dir[n])
       b.setDir();
+    else if (is_multi[n])
+      b.setMulti();
     else
       b.setFile();
   }  
@@ -238,10 +295,6 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
   size_t data_len = dir_message.size();
   
   auto hash = dir_message.hash();
-  
-  if (blake2b(&hash[0], &dir_data[0], key, HASH_BYTES, data_len, BLAKE2B_KEYBYTES) < 0)
-      throw StringException("hash problem");
-  
   /// store it
   db.put(&hash[0], dir_data, hash.size(), data_len);
 
