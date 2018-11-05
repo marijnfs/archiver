@@ -1,4 +1,4 @@
-Archiver
+Archiver : Author(Marijn Stollenga) : License(MPL V2 / see LICENSE)
 ===================
 Backup utility to backup many filesystems into one database, stores files by hashes and stores everyfile only once. 
 Especially useful if you have many duplicates because of many years of copying files everywhere (like I have).
