@@ -86,6 +86,7 @@ struct Message {
   }
 
   Bytes hash() {
+    serialise();
     return get_hash(data(), size());
   }
 
@@ -171,10 +172,10 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
         throw StringException(error->message);
       }
 
-      vector<Bytes> hashes;
+      vector<Bytes> multipart_hashes;
       gsize len(0);
       while (true) {
-        gsize bytes_read = g_input_stream_read (G_INPUT_STREAM(input_stream),
+        gsize bytes_read = g_input_stream_read(G_INPUT_STREAM(input_stream),
                        (void*)&data[0],
                        MULTIPART_SIZE,
                        NULL,
@@ -187,10 +188,10 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
         len += bytes_read;
 
         Bytes hash = get_hash((uint8_t*)&data[0], bytes_read);
-        hashes.push_back(hash);
+        multipart_hashes.push_back(hash);
 
         if (!ONLY_ARCHIVE) {
-          cout << "putting multipart: " << hash << " len: " << bytes_read << endl;
+          cout << "putting multipart: " << hash << " len: " << bytes_read << " " << hash.size() << endl;
           db.put(hash.ptr(), (uint8_t*)&data[0], hash.size(), bytes_read, NOOVERWRITE); //store compressed file in database
         }
 
@@ -198,9 +199,9 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
 
       Message multipart_msg;
       auto mb = multipart_msg.build<cap::MultiPart>();
-      auto pb = mb.initParts(hashes.size());
-      for (int i(0); i < hashes.size(); ++i) {
-        pb.set(i, hashes[i].kjp());
+      auto pb = mb.initParts(multipart_hashes.size());
+      for (int i(0); i < multipart_hashes.size(); ++i) {
+        pb.set(i, multipart_hashes[i].kjp());
       }
       auto multipart_hash = multipart_msg.hash();
       if (!ONLY_ARCHIVE) {
@@ -214,8 +215,11 @@ tuple<Bytes, uint64_t> enumerate(GFile *root, GFile *file) {
       is_dir.push_back(false);
       is_multi.push_back(true);
       total_size += len;
-
-      g_free(input_stream);
+      cout << "before unref" << endl;
+      g_input_stream_close (G_INPUT_STREAM (input_stream), NULL, &error);
+      if (error != NULL) {
+        throw StringException(error->message);
+      }
     } else {
       //calculate its hash
             

@@ -16,7 +16,7 @@ struct StringException : public std::exception {
 std::string user_readable_size(uint64_t size_) {
   double size(size_);
   std::ostringstream oss;
-  oss << std::setprecision(2);
+  oss << std::fixed << std::setprecision(2);
   for (auto str : std::vector<std::string>{"B", "KB", "MB", "GB", "TB"}) {
     if (size < 1024.) {
       oss << size << str;
