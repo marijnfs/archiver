@@ -484,13 +484,17 @@ void list_files(string backup_name) {
 
 void output_file(string backup_name, string full_name) {
   auto f = [full_name](cap::Entry::Reader& entry, string &full_name_){
+    if (full_name != full_name_)
+      return;
     if (entry.isFile()) {
-      //cout << full_name_ << endl;
-      if (full_name == full_name_) {
-        auto data = get_value(entry.getHash());
-        for (auto b : *data)
-          cout << b;
-      } 
+      auto data = get_value(entry.getHash());
+      cerr << "found : " << data->size() << endl;
+      cout.write(data->ptr<char*>(), data->size());
+      cout.flush();
+      cerr << "done" << endl;
+      // for (auto b : *data)
+      //   cout << b;
+      delete data;
     } else if (entry.isMulti()) {
       //multipart file
       auto multipart_data = get_value(entry.getHash());
@@ -498,9 +502,13 @@ void output_file(string backup_name, string full_name) {
       auto reader = flat_reader.getRoot<cap::MultiPart>();
       for (auto part : reader.getParts()) {
         auto data = get_value(part);
-        for (auto b : *data)
-          cout << b;
+        cout.write(data->ptr<char*>(), data->size());
+        // for (auto b : *data)
+        //   cout << b;
+        delete data;
       }
+      delete multipart_data;
+
     }
   };  
 
