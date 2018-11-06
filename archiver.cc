@@ -362,7 +362,7 @@ vector<Backup> get_backups(Bytes root_hash) {
   return returns;
 }
 
-Bytes *get_file(Bytes hash, uint64_t len) {
+Bytes *get_value(Bytes hash) {
   auto data = db.get(hash);
   if (!data)
     StringException("file not found");
@@ -487,10 +487,20 @@ void output_file(string backup_name, string full_name) {
     if (entry.isFile()) {
       //cout << full_name_ << endl;
       if (full_name == full_name_) {
-        auto data = get_file(entry.getHash(), entry.getSize());
+        auto data = get_value(entry.getHash());
         for (auto b : *data)
           cout << b;
       } 
+    } else if (entry.isMulti()) {
+      //multipart file
+      auto multipart_data = get_value(entry.getHash());
+      ::capnp::FlatArrayMessageReader flat_reader(*multipart_data);
+      auto reader = flat_reader.getRoot<cap::MultiPart>();
+      for (auto part : reader.getParts()) {
+        auto data = get_value(part);
+        for (auto b : *data)
+          cout << b;
+      }
     }
   };  
 
@@ -508,24 +518,24 @@ void output_file(string backup_name, string full_name) {
 
 }
 
-struct Archiver {
-  DB db;
+// struct Archiver {
+//   DB db;
 
-  //get all root names
-  vector<string> get_backups() {
-    return vector<string>();
-  }
+//   //get all root names
+//   vector<string> get_backups() {
+//     return vector<string>();
+//   }
 
-  Backup get_backup(string name) {
-    return Backup();
-  }
+//   Backup get_backup(string name) {
+//     return Backup();
+//   }
 
-  //get root backup struct
+//   //get root backup struct
   
 
-  void get_children(Backup backup) {
-  }
-};
+//   void get_children(Backup backup) {
+//   }
+// };
 
 int main(int argc, char **argv) {
   //Set a standard key for the blake hash
