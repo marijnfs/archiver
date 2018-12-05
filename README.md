@@ -16,3 +16,8 @@ Usage
 The database is created under the name archive.db in the directory the program is called (make better).
 
 ./archiver dryrun [collection] [path]
+
+
+
+License:
+MPLv2, See LICENSE file.
